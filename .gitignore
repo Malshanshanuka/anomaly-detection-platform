@@ -1,0 +1,13 @@
+# Node & Frontend
+node_modules/
+.next/
+
+# Python & ML
+venv/
+__pycache__/
+
+# Environment Variables
+.env
+
+# Mac Specific 
+.DS_Store
