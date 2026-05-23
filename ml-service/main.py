@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+import requests
 import torch
 import torch.nn as nn
 import numpy as np
@@ -45,16 +46,16 @@ async def lifespan(app: FastAPI):
         model.load_state_dict(torch.load("models/lstm_autoencoder.pth", map_location=device))
         model.eval() # Set to evaluation mode
 
-        print(" AI Models loaded successfully!")
+        print("✅ AI Models loaded successfully!")
     except Exception as e:
-        print(f" Error loading models: {e}")
+        print(f"❌ Error loading models: {e}")
         print("Please ensure you have run train_model.py and evaluate_model.py first.")
     
     yield # The app runs while this yields
     
     print("Shutting down AI Engine...")
 
-# Initialize FastAPI
+# Initialize FastAPI (මෙන්න මේක මැකිලා තිබුණේ!)
 app = FastAPI(title="AI Anomaly Detection API", lifespan=lifespan)
 
 # ==========================================
@@ -82,27 +83,50 @@ def predict_anomaly(request: PredictionRequest):
         raise HTTPException(status_code=500, detail="Model is not loaded properly.")
 
     # 1. Convert incoming data to numpy array and reshape for scaler
-    # Shape becomes (30, 1)
     data_array = np.array(request.sequence).reshape(-1, 1)
 
     # 2. Scale the data using the loaded scaler
     scaled_data = scaler.transform(data_array)
 
     # 3. Convert to PyTorch Tensor and reshape for LSTM
-    # Expected shape: (batch_size=1, seq_length=30, features=1)
     seq_tensor = torch.FloatTensor(scaled_data).unsqueeze(0).to(device)
 
     # 4. Run Inference
     with torch.no_grad():
         reconstructed = model(seq_tensor)
         
-        # Calculate Mean Absolute Error (MAE) for this sequence
         loss = criterion(reconstructed, seq_tensor)
         sequence_error = torch.mean(loss).item()
 
     # 5. Compare with Threshold
     threshold_value = threshold_data["threshold"]
     is_anomaly = bool(sequence_error > threshold_value)
+
+    # ===========================================================
+    # --- Node.js වෙත දත්ත යැවීම ---
+    # ===========================================================
+    node_api_url = "http://localhost:5005/api/alerts"
+    
+    severity_level = "critical" if is_anomaly else "info"
+    alert_message = "High CPU Anomaly Detected!" if is_anomaly else "CPU usage is normal"
+
+    payload = {
+        "severity": severity_level,
+        "message": alert_message,
+        "detail": "LSTM Autoencoder Model",
+        "error_score": float(sequence_error),
+        "is_anomaly": bool(is_anomaly)
+    }
+
+    try:
+        response = requests.post(node_api_url, json=payload, timeout=2)
+        if response.status_code == 201:
+            print(f" [SUCCESS] Data sent to Node.js: {severity_level.upper()}")
+        else:
+            print(f"⚠️ [WARNING] Node.js returned status: {response.status_code}")
+    except Exception as e:
+        print(f" [ERROR] Could not connect to Node.js Backend: {e}")
+    # ===========================================================
 
     # 6. Return standard JSON response
     return {
